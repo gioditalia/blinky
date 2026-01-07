@@ -4,6 +4,7 @@ import neopixel
 import sys
 import select
 import math
+import json
 
 # 1 LED su GP16
 pixels = neopixel.NeoPixel(machine.Pin(16), 1)
@@ -11,8 +12,7 @@ pixels = neopixel.NeoPixel(machine.Pin(16), 1)
 # Modalità
 MODE_DEV = "DEV"
 MODE_GAME = "GAME"
-MODE_STUDY = "STUDY"
-MODES = [MODE_DEV, MODE_GAME, MODE_STUDY]
+MODES = [MODE_DEV, MODE_GAME]
 # Stati
 STATE_IDLE = "IDLE"
 STATE_ACTIVE = "ACTIVE"
@@ -39,15 +39,6 @@ config = {
                 STATE_NOTIFY: (0, 255, 0),    # rosso (GRB)
                 STATE_PAUSE: (0, 0, 50)       # blu scuro (GRB)
             }
-        },
-        MODE_STUDY: {
-            "timer_minutes": 45,
-            "colors": {
-                STATE_IDLE: (0, 100, 0),        # spento
-                STATE_ACTIVE: (0, 100, 100),  # viola (GRB)
-                STATE_NOTIFY: (0, 255, 0),    # rosso (GRB)
-                STATE_PAUSE: (0, 0, 50)       # blu scuro (GRB)
-            }
         }
     }
 }
@@ -65,16 +56,13 @@ def set_mode(mode):
     
     # Può cambiare modalità solo da IDLE
     if current_state != STATE_IDLE:
-        print(f"ERRORE: Cambiare modalità solo da stato IDLE (stato attuale: {current_state})")
         return False
     
     if mode in MODES:
         current_mode = mode
-        print(f"Modalità: {current_mode}")
         update_led()
         return True
     else:
-        print(f"Modalità non valida: {mode}")
         return False
 
 def set_state(state):
@@ -82,7 +70,6 @@ def set_state(state):
     global current_state, timer_start, timer_duration
     
     if state not in [STATE_IDLE, STATE_ACTIVE, STATE_NOTIFY, STATE_PAUSE]:
-        print(f"Stato non valido: {state}")
         return False
     
     # Validazione transizioni FSM
@@ -94,18 +81,14 @@ def set_state(state):
     }
     
     if state not in valid_transitions[current_state]:
-        print(f"ERRORE: Transizione non valida da {current_state} a {state}")
-        print(f"Transizioni valide da {current_state}: {', '.join(valid_transitions[current_state])}")
         return False
     
     current_state = state
-    print(f"Stato: {current_state}")
     
     # Avvia timer quando si passa ad ACTIVE
     if state == STATE_ACTIVE:
         timer_start = time.time()
         timer_duration = config["modes"][current_mode]["timer_minutes"] * 60
-        print(f"Timer avviato: {config['modes'][current_mode]['timer_minutes']} minuti")
     
     # Reset timer quando si va in IDLE
     elif state == STATE_IDLE:
@@ -113,6 +96,10 @@ def set_state(state):
         timer_duration = 0
     
     update_led()
+    
+    # Notifica evento cambio stato all'app
+    event = {"event": "state_changed", "state": current_state, "mode": current_mode}
+    print(json.dumps(event))
     return True
 
 def update_led():
@@ -127,8 +114,10 @@ def check_timer():
     if current_state == STATE_ACTIVE and timer_duration > 0:
         elapsed = time.time() - timer_start
         if elapsed >= timer_duration:
-            print("Timer scaduto!")
             set_state(STATE_NOTIFY)
+            # Notifica evento all'app
+            event = {"event": "timer_expired", "mode": current_mode}
+            print(json.dumps(event))
             return True
     return False
 
@@ -173,7 +162,7 @@ def get_status():
     return status
 
 def handle_serial_command():
-    """Legge e gestisce comandi dalla seriale"""
+    """Legge e gestisce comandi dalla seriale in formato JSON"""
     poll = select.poll()
     poll.register(sys.stdin, select.POLLIN)
     
@@ -183,48 +172,51 @@ def handle_serial_command():
             if not line:
                 return
             
-            parts = line.split()
-            if len(parts) < 2:
-                print(f"ERROR: Formato comando non valido")
-                return
+            # Parse JSON command
+            cmd = json.loads(line)
+            action = cmd.get("action", "").upper()
             
-            command = parts[0].upper()
-            arg = parts[1].upper()
-            
-            if command == "SET_MODE":
-                if arg in MODES:
-                    set_mode(arg)
-                    print(f"OK: MODE={arg}")
+            if action == "SET_MODE":
+                mode = cmd.get("mode", "").upper()
+                if mode in MODES:
+                    success = set_mode(mode)
+                    response = {"status": "ok" if success else "error", "action": "set_mode", "mode": mode}
                 else:
-                    print(f"ERROR: Modalità non valida '{arg}'")
+                    response = {"status": "error", "action": "set_mode", "message": f"Invalid mode: {mode}"}
+                print(json.dumps(response))
             
-            elif command == "SET_STATE":
-                if arg in [STATE_IDLE, STATE_ACTIVE, STATE_NOTIFY, STATE_PAUSE]:
-                    set_state(arg)
-                    print(f"OK: STATE={arg}")
+            elif action == "SET_STATE":
+                state = cmd.get("state", "").upper()
+                if state in [STATE_IDLE, STATE_ACTIVE, STATE_NOTIFY, STATE_PAUSE]:
+                    success = set_state(state)
+                    if not success:
+                        response = {"status": "error", "action": "set_state", "message": "Invalid transition"}
+                    else:
+                        response = {"status": "ok", "action": "set_state", "state": state}
                 else:
-                    print(f"ERROR: Stato non valido '{arg}'")
+                    response = {"status": "error", "action": "set_state", "message": f"Invalid state: {state}"}
+                print(json.dumps(response))
             
-            elif command == "GET_STATUS":
+            elif action == "GET_STATUS":
                 status = get_status()
-                # Formato: STATUS: mode,state,timer_remaining
-                print(f"STATUS: {status['mode']},{status['state']},{status['timer_remaining']}")
+                response = {"status": "ok", "action": "get_status", "data": status}
+                print(json.dumps(response))
             
             else:
-                print(f"ERROR: Comando sconosciuto '{command}'")
+                response = {"status": "error", "message": f"Unknown action: {action}"}
+                print(json.dumps(response))
         
+        except json.JSONDecodeError as e:
+            response = {"status": "error", "message": f"Invalid JSON: {str(e)}"}
+            print(json.dumps(response))
         except Exception as e:
-            print(f"ERROR: {e}")
+            response = {"status": "error", "message": str(e)}
+            print(json.dumps(response))
 
 # Inizializzazione
 set_state(STATE_IDLE)
 
-print("\n=== Timer Notifier Ready ===")
-print("FSM: IDLE->ACTIVE, ACTIVE->PAUSE/NOTIFY/IDLE, PAUSE->ACTIVE/IDLE, NOTIFY->PAUSE/IDLE")
-print(f"Modalità disponibili: {', '.join(MODES)}")
-print("Comandi seriali: SET_MODE <mode>, SET_STATE <state>, GET_STATUS")
-print(f"Modalità corrente: {current_mode}")
-print(f"Stato corrente: {current_state}")
+print(json.dumps({"event": "ready", "mode": current_mode, "state": current_state, "modes": MODES}))
 
 # Main loop
 while True:
