@@ -1,0 +1,41 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# MicroPython specific
+*.mpy
+*.pyc
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# OS files
+Thumbs.db
+desktop.ini
+
+# Configuration files (if any)
+config.json
+
+# Log files
+*.log
+
+# Temporary files
+*.tmp
+*.bak
+.~*
+
+# Virtual environment
+venv/
+env/
+ENV/
+
+# Distribution / packaging
+*.egg-info/
+dist/
+build/
