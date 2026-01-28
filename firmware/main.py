@@ -19,7 +19,6 @@ STATE_ACTIVE = "ACTIVE"
 STATE_NOTIFY = "NOTIFY"
 STATE_PAUSE = "PAUSE"
 
-# Configurazione (salvabile in flash)
 config = {
     "modes": {
         MODE_DEV: {
@@ -49,6 +48,7 @@ current_state = STATE_IDLE
 timer_start = 0
 timer_duration = 0
 fade_start = 0
+elapsed_before_pause = 0
 
 def set_mode(mode):
     """Imposta la modalità (DEV/GAME) - solo da IDLE"""
@@ -67,7 +67,7 @@ def set_mode(mode):
 
 def set_state(state):
     """Imposta lo stato del dispositivo con validazione FSM"""
-    global current_state, timer_start, timer_duration
+    global current_state, timer_start, timer_duration, elapsed_before_pause
     
     if state not in [STATE_IDLE, STATE_ACTIVE, STATE_NOTIFY, STATE_PAUSE]:
         return False
@@ -77,7 +77,7 @@ def set_state(state):
         STATE_IDLE: [STATE_ACTIVE],
         STATE_ACTIVE: [STATE_PAUSE, STATE_NOTIFY, STATE_IDLE],
         STATE_PAUSE: [STATE_ACTIVE, STATE_IDLE],
-        STATE_NOTIFY: [STATE_PAUSE, STATE_IDLE]
+        STATE_NOTIFY: [ STATE_IDLE]
     }
     
     if state not in valid_transitions[current_state]:
@@ -87,13 +87,24 @@ def set_state(state):
     
     # Avvia timer quando si passa ad ACTIVE
     if state == STATE_ACTIVE:
-        timer_start = time.time()
-        timer_duration = config["modes"][current_mode]["timer_minutes"] * 60
-    
+        if elapsed_before_pause > 0:
+            # Riprende da pausa
+            timer_start = time.time() - elapsed_before_pause
+            elapsed_before_pause = 0
+        else:
+            timer_start = time.time()
+            timer_duration = config["modes"][current_mode]["timer_minutes"] * 60
+
+    elif state == STATE_PAUSE:
+        # Salva progresso
+        if timer_start > 0 and timer_duration > 0:
+            elapsed_before_pause = time.time() - timer_start
+
     # Reset timer quando si va in IDLE
     elif state == STATE_IDLE:
         timer_start = 0
         timer_duration = 0
+        elapsed_before_pause = 0
     
     update_led()
     
@@ -158,7 +169,9 @@ def get_status():
     if current_state == STATE_ACTIVE and timer_duration > 0:
         elapsed = time.time() - timer_start
         status["timer_remaining"] = int(timer_duration - elapsed)
-    
+    elif current_state == STATE_PAUSE and elapsed_before_pause > 0:
+        status["timer_remaining"] = int(timer_duration - elapsed_before_pause)
+        
     return status
 
 def handle_serial_command():

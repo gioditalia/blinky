@@ -112,7 +112,8 @@ pip install mpremote
 
 ### 3. Caricare il codice
 ```bash
-cd hello
+cd firmware
+mpremote connect COM7 mip install neopixel
 mpremote connect COM7 fs cp main.py :
 mpremote connect COM7 reset
 ```
